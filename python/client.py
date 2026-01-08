@@ -1,8 +1,15 @@
 
-from cbor2 import dumps, loads, load
+import json
 import socket
-import sys
 import time
+
+# class Serializable:
+#     def __init__(self):
+#         pass
+#     def deserialize(self):
+#         raise NotImplementedError
+#     def serialize(self):
+#         raise NotImplementedError
 
 class MyStruct:
     def __init__(self, big, small):
@@ -10,9 +17,14 @@ class MyStruct:
         self.small = small
 
     @staticmethod
-    def serialize(encoder, value):
-        encoder.encode(dict(typename=MyStruct.__name__, big=value.big, small=value.small))
+    def deserialize(json_str):
+        dict = json.loads(json_str)
+        return MyStruct(**dict)
 
+    def serialize(self):
+        # serialize with no whitespace
+        return json.dumps(self.__dict__, separators=(',', ':'))
+ 
 
 my_struct = MyStruct(128, 64)
 
@@ -22,25 +34,23 @@ def client_program():
     host = '127.0.0.1' 
     port = 12345  # Must match the server's port
 
-    print('Running')
-    time.sleep(1)
+    # time.sleep(1)
     # Create a socket object using IPv4 (AF_INET) and TCP (SOCK_STREAM)
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_sock:
             # Connect to the server
             client_sock.connect((host, port))
 
-            # serialize my_struct to CBOR format
-            bin_data = dumps(my_struct, default=MyStruct.serialize)
-            size = len(bin_data)
-            print(f"Sending: {bin_data!r}")
+            json_str = my_struct.serialize()
+            size = len(json_str)
+            print(f"Sending: {json_str!r}")
 
-            formatted_hex = ' '.join(f'{b:02x}' for b in bin_data)
-            print(formatted_hex)
+            # formatted_hex = ' '.join(f'{b:02x}' for b in json_str)
+            # print(formatted_hex)
 
             # Send data to the server, encoding the string to bytes
             client_sock.sendall(size.to_bytes(4, byteorder='big'))  # Send size first
-            client_sock.sendall(bin_data)
+            client_sock.sendall(json_str.encode('utf-8'))
             
             # Shut down the sending side to signal the server that we are done sending data
             client_sock.shutdown(socket.SHUT_WR)

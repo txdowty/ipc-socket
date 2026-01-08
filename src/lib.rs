@@ -1,99 +1,80 @@
 use std::{
-    io,
-    io::{BufReader, prelude::*},
-    net::{TcpListener, TcpStream},
+    io::{self, BufReader, ErrorKind, prelude::*},
+    mem,
+    net::{TcpListener, TcpStream}
 };
+    use std::net::SocketAddrV4;
 
 pub struct Connection {
-    address: String,
-    port: u16,
+    sock_addr: SocketAddrV4,
     listener: Option<TcpListener>,
 }
 
 impl Connection {
-    pub fn new(address: String, port: u16) -> Self {
+    pub fn new(sock_addr: SocketAddrV4) -> Self {
         Connection {
-            address: address,
-            port: port,
+            sock_addr: sock_addr,
             listener: None,
         }
     }
 
     pub fn connect(&mut self) -> io::Result<()> {
-        let full_address = format!("{}:{}", self.address, self.port);
-        let listener = TcpListener::bind(full_address)?;
-        // non-blocking
+        let listener = TcpListener::bind(self.sock_addr)?;
+        // set non-blocking
         listener.set_nonblocking(true)?;
         self.listener = Some(listener);
-        // if self.listener.is_none() {
-        //     std::io::Error
-        //     return Err("no listener");
-        // }
-        // assert!(self.listener.is_some());
         Ok(())
     }
 
-    pub fn get_data(&self, buffer: &mut [u8; 512]) -> Option<String> {
-        if self.listener.is_none() {
-            return None;
-        }
+    pub fn get_data(&self, max_size: usize) -> io::Result<Vec<u8>> {
+        // if self.listener.is_none() {
+        //     return None;
+        // }
 
         let incoming = self.listener.as_ref().unwrap().incoming();
         for stream in incoming {
             match stream {
                 Ok(stream) => {
-                    return Some(Self::handle_connection(stream, buffer));
+                    return Self::handle_connection(stream, max_size);
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // No incoming connection, return None
-                    return None;
+                    // No incoming connection, return empty vec
+                    break;
                 }
                 Err(e) => {
-                    eprintln!("Error accepting connection: {}", e);
+                    return Err(e);
                 }
             }
         }
-        None
+        Ok(Vec::new())
     }
 
-
-    fn get_message_size(stream: &mut BufReader<&TcpStream>) -> std::io::Result<usize> {
+    fn get_message_size(stream: &mut BufReader<&TcpStream>) -> io::Result<usize> {
         let mut size_buffer = [0u8; 4];
         stream.read_exact(&mut size_buffer)?;
         let size = u32::from_be_bytes(size_buffer) as usize;
         Ok(size)
     }
 
-    fn handle_connection(stream: TcpStream, buffer: &mut [u8; 512]) -> String {
+    fn handle_connection(stream: TcpStream, max_size: usize) -> io::Result<Vec<u8>> {
         let mut buf_reader = BufReader::new(&stream);
-        let _total_size = Self::get_message_size(&mut buf_reader);
-        let mut_slice: &mut [u8] = &mut buffer[..];
-        loop {
-            // read data into buffer, returns numer of bytes read
-            match buf_reader.read(mut_slice) {
-                Ok(0) => break, // connection closed
-                Ok(n) => {
-                    println!("Read {} bytes", n);
-                    // total_bytes_read += n;
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => {
-                    eprintln!("Error reading from stream: {}", e);
-                    break;
-                }
-            }
+
+        // get message size from message header
+        let total_size = Self::get_message_size(&mut buf_reader).unwrap();
+
+        // is max_size adequate?
+        if total_size + mem::size_of::<u32>() > max_size {
+            return Err(io::Error::new(ErrorKind::FileTooLarge, "max size exceeded"));
         }
 
-        String::from("Data received")
-        // let http_request: Vec<_> = buf_reader
-        //     .lines()
-        //     .map(|result| result.unwrap())
-        //     .take_while(|line| !line.is_empty())
-        //     .collect();
+        // allocate data buffer
+        let mut buffer: Vec<u8> = vec![0; total_size];
+        // let buffer_slice: &mut [u8] = &mut buffer[..];
+        let buffer_slice: &mut [u8] = buffer.as_mut_slice();
 
-        // let http_request: Vec<String> = raw_data.iter().map(|b| format!("{:02X}", b)).collect();
-        // println!("Request: {http_request:#?}");
-        // http_request.join("\n")
+        buf_reader.read_exact(buffer_slice)?;
+
+        Ok(buffer)
     }
 }
 
@@ -103,9 +84,11 @@ mod tests {
 
     // use serde_cbor::from_slice;
     use serde::{Deserialize, Serialize};
-    use std::path::PathBuf;
-    use std::process::{Command, Stdio};
-    use std::{env, fs};
+    use std::path::{Path, PathBuf};
+    use std::process::{Child, Command, Stdio};
+    use std::str::FromStr;
+    use std::{env};
+    use std::net::SocketAddrV4;
 
     #[derive(Deserialize, Serialize, PartialEq, Eq, Debug)]
     struct MyStruct {
@@ -113,63 +96,75 @@ mod tests {
         small: u32,
     }
 
-    
+
+    fn spawn_python_script(rel_path_to_script: &Path) -> io::Result<Child> {
+        // start the client app using the venv python
+        let package_root_dir = env!("CARGO_MANIFEST_DIR");
+        let python_path = PathBuf::from(package_root_dir)
+            .join(".venv").join("bin").join("python");
+        let script_path = PathBuf::from(package_root_dir)
+            .join(rel_path_to_script);
+
+        println!("spawning: {} {}", python_path.to_str().unwrap(),
+            script_path.to_str().unwrap());
+
+        let mut script_cmd = Command::new(python_path);
+        script_cmd.arg(&script_path.to_str().unwrap()).stdout(Stdio::piped());
+        script_cmd.spawn()
+    }
+
     #[test]
     fn basic() {
 
-        
-        let ip_address = String::from("127.0.0.1");
-        let port = 12345;
+        let my_struct = MyStruct {
+            big: 128,
+            small: 64
+        };
 
-        let mut connection: Connection = Connection::new(ip_address, port);
+        let endpoint = "127.0.0.1:12345";
+        let socket_addr = SocketAddrV4::from_str(endpoint);
+
+        let mut connection: Connection = Connection::new(socket_addr.unwrap());
         match connection.connect() {
             Err(e) => assert!(false, "{}", e),
             Ok(()) => {}
         }
 
-        // start the client app
-        let package_root_dir = env!("CARGO_MANIFEST_DIR");
-        let python_path = PathBuf::from(package_root_dir)
-            .join(".venv").join("bin").join("python");
-        let file_path = PathBuf::from(package_root_dir)
-            .join("python").join("client.py");
-        println!("{}", file_path.to_str().unwrap());
-        
-        assert!(fs::exists(&file_path).unwrap());
-
-        Command::new("ls").arg(&file_path).spawn().expect("ls failed");
-
-        let mut output = Command::new(python_path);
-
-        output.arg(&file_path.to_str().unwrap()).stdout(Stdio::piped());
-        let mut child = output.spawn().expect("couldn't start script");
-
         // Take the stdout handle from the child and wrap it in a BufReader
-        let stdout = child.stdout.take().expect("Could not capture stdout");
-        let reader = BufReader::new(stdout);
+        let mut child_handle = spawn_python_script(Path::new("python/client.py")).unwrap();
+        let child_stdout = child_handle.stdout.take().expect("Could not capture stdout");
+        let reader = BufReader::new(child_stdout);
 
-        let mut buffer: [u8; 512] = [0; 512];
         loop {
             std::thread::sleep(std::time::Duration::from_millis(100));
-            let x = connection.get_data(&mut buffer);
-            if let Some(_data) = x {
-                let mut_slice: &mut [u8] = &mut buffer[..33];
-                println!("Received data: {:?}", mut_slice);
-
-                // deserialize from CBOR format
-                let received: MyStruct = serde_cbor::from_slice(mut_slice).unwrap();
-                println!("Deserialized struct: {:?}", received);
-                break;
+            // let x = connection.get_data(&mut buffer);
+            match connection.get_data(512) {
+                Err(e) => {
+                    assert!(false, "{}", e);
+                }
+                Ok(buffer) => {
+                    if buffer.len() > 0 {
+                        println!("Received data size: {:?}", buffer.len());
+                        let json_str = String::from_utf8(buffer)
+                                                    .unwrap();
+                        // deserialize from JSON format
+                        println!("Received data: {:?}", json_str);
+                        let deserialized_obj: MyStruct = serde_json::from_str(json_str.as_str()).unwrap();
+                        assert_eq!(deserialized_obj.big, my_struct.big);
+                        assert_eq!(deserialized_obj.small, my_struct.small);
+                        break;
+                    }
+                }
             }
         }
-        // Read the output line by line
+        // Read and print the output line by line
         println!("Reading output from child process:");
         for line in reader.lines() {
             match line {
-            Ok(line) => println!("Child Output: {}", line),
-            Err(e) => eprintln!("Error reading line: {}", e),
+                Ok(line) => println!("Child Output: {}", line),
+                Err(e) => eprintln!("Error reading line: {}", e),
+            }
         }
-    }
     }
 
 }
