@@ -1,11 +1,11 @@
 pub mod ipc;
 
-  use serde::{Deserialize, Serialize};
-#[derive(Deserialize, Serialize, PartialEq, Eq, Debug)]
-struct MyStruct {
-    big: u64,
-    small: u32,
-}
+// use serde::{Deserialize, Serialize};
+// #[derive(Deserialize, Serialize, PartialEq, Eq, Debug)]
+// struct MyStruct {
+//     big: u64,
+//     small: u32,
+// }
 
 
 

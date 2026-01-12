@@ -46,7 +46,6 @@ impl IpcServer {
         let socket = UdpSocket::bind(self.addr)?;
         socket.set_nonblocking(true).unwrap();
         self.socket = Some(socket);
-
         Ok(())
     }
 
@@ -98,7 +97,7 @@ impl IpcClient {
     /// # Returns
     pub fn connect(&mut self) -> io::Result<()> {
         let socket = UdpSocket::bind(self.addr)?;
-        socket.set_nonblocking(true).unwrap();
+        // socket.set_nonblocking(true).unwrap();
         self.socket = Some(socket);
 
         Ok(())
@@ -107,6 +106,25 @@ impl IpcClient {
     pub fn send_data(&self, data: &[u8], remote_addr: &SocketAddrV4) -> io::Result<usize> {
         let byte_count = self.get_socket().send_to(data, remote_addr)?;
         Ok(byte_count)
+    }
+
+    pub fn send_data_with_response(&self, data: &[u8], remote_addr: &SocketAddrV4, max_response_size: usize) -> io::Result<Option<Vec<u8>>> {
+        let byte_count = self.get_socket().send_to(data, remote_addr)?;
+        println!("Sent {} bytes to {}", byte_count, remote_addr);
+        let mut buffer: Vec<u8> = vec![0; max_response_size];
+        match self.get_socket().recv_from(buffer.as_mut_slice()) {
+            Ok((0, _)) => return Ok(None),
+            Ok((len, _)) => {
+                buffer.truncate(len);
+                return Ok(Some(buffer));
+            },
+            Err(e) => {
+                if !matches!(e.kind(), ErrorKind::WouldBlock) {
+                    return  Err(e);
+                }
+            },
+        }
+        Ok(None)
     }
 
         // ---- private -----

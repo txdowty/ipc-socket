@@ -28,6 +28,11 @@
 
                     println!("Received data: {}", str);
 
+                    if str == "exit" {
+                        println!("Exiting server.");
+                        break;
+                    }
+
                     // send the same data back (echo)
                     let mut client = IpcClient::new(server_addr);
                     client.connect()?;
@@ -41,4 +46,5 @@
             }
         }
     }
+    Ok(())
 }
