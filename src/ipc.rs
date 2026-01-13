@@ -3,19 +3,21 @@
 //! Provides a server on a dgram internet socket
 //!
  
-#![allow(dead_code)]
+// #![allow(dead_code)]
 
-#[cfg(test)] // Tells Rust to compile this module only during tests
-#[path = "ipc/tests.rs"] // Specifies the file location
+// #[cfg(test)] // Tells Rust to compile this module only during tests
+#[path = "ipc/tests.rs"] // Specifies the file location of the tests
 mod tests;
 
 use std::{
     io::{self, ErrorKind},
-    net::{SocketAddrV4, UdpSocket}
+    net::{SocketAddr, UdpSocket},
+    time::Duration,
 };
 
+/// Implements an IPC server that uses a DGRAM socket
 pub struct IpcServer {
-    addr: SocketAddrV4,
+    addr: SocketAddr,
     socket: Option<UdpSocket>,
 }
 
@@ -25,11 +27,7 @@ impl IpcServer {
     /// 
     /// # Arguments
     /// * `sock_addr` - The server address as a SocketAddrV4.
-    /// 
-    /// # Returns
-    /// The new object instance.
-    /// 
-    pub fn new(sock_addr: SocketAddrV4) -> Self {
+    pub fn new(sock_addr: SocketAddr) -> Self {
         IpcServer {
             addr: sock_addr,
             socket: None,
@@ -38,29 +36,38 @@ impl IpcServer {
 
     /// Binds to the address used to construct the object.
     /// 
+    /// This must be called once before any calls to get() or send().
+    /// 
     /// # Arguments
     /// * none
     /// 
-    /// # Returns
-    pub fn connect(&mut self) -> io::Result<()> {
+    pub fn bind(&mut self) -> io::Result<()> {
         let socket = UdpSocket::bind(self.addr)?;
         socket.set_nonblocking(true).unwrap();
         self.socket = Some(socket);
         Ok(())
     }
 
-    /// Receives data from the socket. Non-blocking.
-    pub fn get_data(&self, max_size: usize) -> io::Result<Option<Vec<u8>>> {
+    /// Receives data from the socket.
+    /// 
+    /// Performs non-blocking reads, so this should be called
+    /// in a polling loop.
+    /// 
+    /// # Arguments
+    /// * `max_size` - the maximum size of the expected message
+    /// 
+    pub fn get(&self, max_size: usize) -> io::Result<Option<(SocketAddr, Vec<u8>)>> {
+        let socket = self.get_socket();
         let mut buffer: Vec<u8> = vec![0; max_size];
-        let socket = self.get_socket().unwrap();
         match socket.recv_from(buffer.as_mut_slice()) {
             Ok((0, _)) => return Ok(None),
-            Ok((len, _)) => {
+            Ok((len, source_addr)) => {
+                println!("rec from {}", source_addr);
                 buffer.truncate(len);
-                return Ok(Some(buffer));
+                return Ok(Some((source_addr, buffer)));
             },
             Err(e) => {
-                if !matches!(e.kind(), ErrorKind::WouldBlock) {
+                if !matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) {
                     return  Err(e);
                 }
             },
@@ -68,21 +75,39 @@ impl IpcServer {
         Ok(None)
     }
 
-    // ---- private -----
-    fn get_socket(&self) -> Option<&UdpSocket> {
-        self.socket.as_ref()
+    /// Sends data to another endpoint.
+    ///
+    /// # Arguments
+    /// * `send_data` - the data to be sent.
+    /// * `remote_addr` - the destination address.
+    /// 
+    pub fn send(&self, send_data: &[u8], remote_addr: &SocketAddr) -> io::Result<usize> {
+        match self.get_socket().send_to(send_data, remote_addr) {
+            Ok(size) => Ok(size),
+            Err(e) => Err(e),
+        }
     }
 
-
+    // ---- private -----
+    fn get_socket(&self) -> &UdpSocket {
+        self.socket.as_ref().unwrap()
+    }
  }
 
+ /// Implements an IPC client that uses a DGRAM socket
  pub struct IpcClient {
-    addr: SocketAddrV4,
+    addr: SocketAddr,
     socket: Option<UdpSocket>,
  }
 
-impl IpcClient {
-    pub fn new(sock_addr: SocketAddrV4) -> Self {
+ impl IpcClient {
+
+    /// Creates an IpcClient instance.
+    /// 
+    /// # Arguments
+    /// * `sock_address` - the address to be used for the client
+    /// 
+    pub fn new(sock_addr: SocketAddr) -> Self {
         IpcClient {
             addr: sock_addr,
             socket: None,
@@ -91,58 +116,67 @@ impl IpcClient {
 
     /// Binds to the address used to construct the object.
     /// 
+    /// This must be called once before any calls to send() or send_wait_response().
+    /// 
     /// # Arguments
     /// * none
     /// 
-    /// # Returns
-    pub fn connect(&mut self) -> io::Result<()> {
+    pub fn bind(&mut self) -> io::Result<()> {
         let socket = UdpSocket::bind(self.addr)?;
-        // socket.set_nonblocking(true).unwrap();
         self.socket = Some(socket);
-
+        self.set_read_timeout(Some(Duration::from_millis(500)))?;
         Ok(())
     }
 
-    pub fn send_data(&self, data: &[u8], remote_addr: &SocketAddrV4) -> io::Result<usize> {
+    /// Sends data to another endpoint.
+    ///
+    /// # Arguments
+    /// * `send_data` - the data to be sent.
+    /// * `remote_addr` - the destination address.
+    /// 
+    pub fn send(&self, data: &[u8], remote_addr: &SocketAddr) -> io::Result<usize> {
         let byte_count = self.get_socket().send_to(data, remote_addr)?;
         Ok(byte_count)
     }
 
-    pub fn send_data_with_response(&self, data: &[u8], remote_addr: &SocketAddrV4, max_response_size: usize) -> io::Result<Option<Vec<u8>>> {
-        let byte_count = self.get_socket().send_to(data, remote_addr)?;
+    /// Sends data to another endpoint and waits for a response.
+    /// 
+    /// The response data is returned.
+    ///
+    /// # Arguments
+    /// * `send_data` - the data to be sent.
+    /// * `remote_addr` - the destination address.
+    /// * `max_response_size` - maximum size of the response payload
+    /// 
+    pub fn send_wait_response(&self, send_data: &[u8], remote_addr: &SocketAddr, max_response_size: usize) -> io::Result<Option<(SocketAddr, Vec<u8>)>> {
+        let byte_count = self.send(send_data, remote_addr)?;
         println!("Sent {} bytes to {}", byte_count, remote_addr);
         let mut buffer: Vec<u8> = vec![0; max_response_size];
+        // this should block
         match self.get_socket().recv_from(buffer.as_mut_slice()) {
-            Ok((0, _)) => return Ok(None),
-            Ok((len, _)) => {
+            Ok((0, _)) => Ok(None),
+            Ok((len, src_addr)) => {
                 buffer.truncate(len);
-                return Ok(Some(buffer));
+                Ok(Some((src_addr, buffer)))
             },
             Err(e) => {
-                if !matches!(e.kind(), ErrorKind::WouldBlock) {
-                    return  Err(e);
-                }
+                Err(e)
             },
         }
-        Ok(None)
     }
 
-        // ---- private -----
+    pub fn set_read_timeout(&self, duration: Option<Duration>) -> io::Result<()> {
+        self.get_socket().set_read_timeout(duration)?;
+        Ok(())
+    }
+
+    pub fn read_timeout(&self) -> io::Result<Option<Duration>> {
+        let duration = self.get_socket().read_timeout()?;
+        Ok(duration)
+    }
+
+    // ---- private -----
     fn get_socket(&self) -> &UdpSocket {
         self.socket.as_ref().unwrap()
     }
-// Bind to an OS-assigned port on any interface. Port 0 means the OS chooses an available port.
-    // let socket = UdpSocket::bind("0.0.0.0:0")?;
-    
-    // The address of the remote server you want to communicate with.
-    // Ensure a corresponding UDP server is running on this address and port.
- 
-    // // Create a buffer to receive the response.
-    // let mut buf = [0; 1024];
-    // // Receive data and the source address of the response using `recv_from`.
-    // let (amt, src) = socket.recv_from(&mut buf)?;
-    
-    // println!("Received {} bytes from {}: {:?}", amt, src, str::from_utf8(&buf[..amt]).unwrap());
-
-    // Ok(())
 }

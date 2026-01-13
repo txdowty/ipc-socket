@@ -7,8 +7,6 @@ pub mod ipc;
 //     small: u32,
 // }
 
-
-
 // #[cfg(test)]
 // mod tests {
 //     // use super::*;
@@ -29,7 +27,6 @@ pub mod ipc;
 //         small: u32,
 //     }
 
-
 //     fn spawn_python_script(rel_path_to_script: &Path) -> io::Result<Child> {
 //         // start the client app using the venv python
 //         let package_root_dir = env!("CARGO_MANIFEST_DIR");
@@ -46,14 +43,14 @@ pub mod ipc;
 //         script_cmd.spawn()
 //     }
 
-    // fn print_bufreader(reader: BufReader<ChildStdout>) {
-    //    for line in reader.lines() {
-    //         match line {
-    //             Ok(line) => println!("Child Output: {}", line),
-    //             Err(e) => eprintln!("Error reading line: {}", e),
-    //         }
-    //     }
-    // }
+// fn print_bufreader(reader: BufReader<ChildStdout>) {
+//    for line in reader.lines() {
+//         match line {
+//             Ok(line) => println!("Child Output: {}", line),
+//             Err(e) => eprintln!("Error reading line: {}", e),
+//         }
+//     }
+// }
 
 //     #[test]
 //     fn basic() {
@@ -78,7 +75,7 @@ pub mod ipc;
 
 //         loop {
 //             std::thread::sleep(std::time::Duration::from_millis(100));
-  
+
 //             match connection.get_data(512) {
 //                 Ok(None) => continue, // no data available
 //                 Ok(buffer) => {
@@ -88,7 +85,7 @@ pub mod ipc;
 //                         println!("Received data size: {:?}", len);
 //                         let json_str = String::from_utf8(unwrapped_buf)
 //                         .unwrap();
-                    
+
 //                         println!("Received data: {}", json_str);
 //                         let _d: Value = serde_json::from_str(json_str.as_str()).unwrap();
 //                         println!("{:#?}", &_d);
@@ -99,7 +96,7 @@ pub mod ipc;
 //                                     assert_eq!(deserialized_obj.big, my_struct.big);
 //                                     assert_eq!(deserialized_obj.small, my_struct.small);
 //                                     break;
-                                    
+
 //                                 },
 //                                 _ => assert!(false, "Unknown cmd: {}", s)
 //                             }
@@ -118,4 +115,3 @@ pub mod ipc;
 //         print_bufreader(buf_reader);
 //     }
 // }
-
